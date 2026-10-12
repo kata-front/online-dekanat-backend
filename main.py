@@ -61,7 +61,7 @@ async def lifespan(app: FastAPI):
 
 class AnalyzeResponse(BaseModel):
     status: str
-    promt: str  # Keep the existing response key for client compatibility.
+    promt: str 
     photos: int
     answers: list[str]
 
@@ -109,7 +109,6 @@ async def analyze(
             except InvalidImage as exc:
                 raise HTTPException(422, str(exc)) from exc
             except Exception as exc:
-                # Do not log the question, file contents or exception message.
                 logger.error('OCR failed (%s)', type(exc).__name__)
                 raise HTTPException(503, 'Не удалось распознать текст. Попробуйте позже') from exc
             texts.append(text)
