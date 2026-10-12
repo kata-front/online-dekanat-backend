@@ -3,12 +3,13 @@ from io import BytesIO
 from typing import Protocol
 
 from PIL import Image, UnidentifiedImageError
+from collections.abc import Sequence
 
 MAX_IMAGE_PIXELS = 20_000_000
 
 
 class Reader(Protocol):
-    def readtext(self, image: bytes, *, detail: int, paragraph: bool) -> list[str]: ...
+    def readtext(self, image: bytes, *, detail: int, paragraph: bool) -> Sequence[object]: ...
 
 
 class InvalidImage(ValueError):
@@ -37,5 +38,12 @@ def ocr(reader: Reader, content: bytes, content_type: str) -> str:
     except (UnidentifiedImageError, OSError, Image.DecompressionBombError) as exc:
         raise InvalidImage('Файл не является корректным изображением') from exc
 
-    lines = reader.readtext(content, detail=0, paragraph=True)
+    result = reader.readtext(content, detail=0, paragraph=True)
+
+    lines: list[str] = []
+    for item in result:
+        if not isinstance(item, str):
+            raise TypeError('EasyOCR returned a non-string text item')
+        lines.append(item)
+
     return '\n'.join(lines)

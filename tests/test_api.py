@@ -3,7 +3,7 @@ from io import BytesIO
 
 import anyio
 import httpx
-import pytest
+import pytest # type: ignore
 from fastapi import HTTPException, UploadFile
 from fastapi.testclient import TestClient
 from PIL import Image
@@ -314,7 +314,7 @@ def test_multipart_temporary_files_closed_on_stream_limit(monkeypatch):
     from starlette import formparsers
 
     files = []
-    original = formparsers.SpooledTemporaryFile
+    original = formparsers.SpooledTemporaryFile # type: ignore
 
     def temporary_file(*args, **kwargs):
         file = original(*args, **kwargs)
