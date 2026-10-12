@@ -1,0 +1,10 @@
+# API tests use a fake reader and do not download OCR models or PyTorch.
+fastapi==0.143.0
+starlette==1.7.0
+anyio==4.15.1
+pydantic==2.14.1
+python-multipart==0.0.32
+Pillow==12.3.0
+httpx==0.28.1
+pytest==9.1.1
+ruff==0.17.0
