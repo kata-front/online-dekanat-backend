@@ -70,7 +70,6 @@ async def lifespan(app: FastAPI):
 class AnalyzeResponse(BaseModel):
     status: str
     ocr_text: str
-    blocks: list[dict]
     document_type: DocumentType
     fields: dict[str, str | bool]
 

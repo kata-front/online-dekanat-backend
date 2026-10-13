@@ -38,4 +38,4 @@ def recognize_document(
     text = blocks_to_text(blocks)
     fields = extract_fields(text, document_type)
     fields.update(detect_marks(image, blocks, needs_seal='seal_present' in fields))
-    return {'ocr_text': text, 'blocks': blocks, 'fields': fields}
+    return {'ocr_text': text, 'fields': fields}
