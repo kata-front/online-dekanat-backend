@@ -40,7 +40,9 @@ def _extract_labeled_value(text: str, label: str) -> str:
 
     value = match.group(1).strip()
 
-    return value if value else 'не найдено'
+    if not value or re.fullmatch(r'[_–—\-\s]+', value):
+        return 'не найдено'
+    return value
 
 
 def _normalize_date(value: str) -> str:

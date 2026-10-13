@@ -74,7 +74,7 @@ def test_valid_image_preserves_contract(client, reader, image_format, mime):
     assert result['status'] == 'received'
     assert result['document_type'] == 'study_certificate'
     assert result['ocr_text'] == 'Первая строка\nSecond line'
-    assert len(result['blocks']) == 2
+    assert 'blocks' not in result
     assert result['fields']['student_name'] == 'не найдено'
     assert result['fields']['signature_present'] is False
     assert reader.calls == 1
@@ -297,7 +297,7 @@ def test_reader_gpu_setting(monkeypatch, setting, expected):
         return sentinel
 
     monkeypatch.setitem(sys.modules, 'easyocr', SimpleNamespace(Reader=factory))
-    assert ocr_service.create_reader() is sentinel
+    assert ocr_service.create_reader().layout_reader is sentinel
     assert calls == [(['ru', 'en'], expected)]
 
 

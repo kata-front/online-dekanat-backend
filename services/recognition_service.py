@@ -1,4 +1,4 @@
-"""One local OCR pass: file -> image -> blocks -> text -> document card."""
+"""Local OCR: EasyOCR coordinates, Tesseract text, then the document card."""
 
 from services.document_fields import extract_fields
 from services.document_loader import load_image
@@ -35,7 +35,8 @@ def recognize_document(
 ) -> dict:
     image = load_image(content, content_type)
     blocks = read_ocr_blocks(reader, image)
-    text = blocks_to_text(blocks)
+    text_reader = getattr(reader, 'read_document_text', None)
+    text = text_reader(image) if callable(text_reader) else blocks_to_text(blocks)
     fields = extract_fields(text, document_type)
     fields.update(detect_marks(image, blocks, needs_seal='seal_present' in fields))
     return {'ocr_text': text, 'fields': fields}

@@ -10,6 +10,7 @@ from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from services.ocr_service import InvalidImage, create_reader
 from services.recognition_service import recognize_document
+from services.text_ocr_service import initialize_text_ocr
 
 MAX_FILE_BYTES = 10 * 1024 * 1024
 MAX_REQUEST_BYTES = 42 * 1024 * 1024
@@ -59,6 +60,7 @@ class RequestSizeLimit:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    initialize_text_ocr()
     app.state.reader = await to_thread.run_sync(create_reader)
     app.state.ocr_limiter = CapacityLimiter(1)
     try:

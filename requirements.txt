@@ -9,3 +9,4 @@ easyocr==1.7.2
 PyMuPDF==1.28.2
 opencv-python-headless==5.0.0.93
 numpy==2.5.3
+tesserocr==2.11.0

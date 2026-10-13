@@ -23,7 +23,9 @@ def create_reader() -> Reader:
     # Importing the API must not load models or require EasyOCR in unit tests.
     import easyocr
 
-    return easyocr.Reader(['ru', 'en'], gpu=gpu in ('true', '1'))
+    from services.text_ocr_service import DocumentReader
+
+    return DocumentReader(easyocr.Reader(['ru', 'en'], gpu=gpu in ('true', '1')))
 
 
 def ocr(reader: Reader, content: bytes, content_type: str) -> str:
