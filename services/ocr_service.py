@@ -47,3 +47,29 @@ def ocr(reader: Reader, content: bytes, content_type: str) -> str:
         lines.append(item)
 
     return '\n'.join(lines)
+
+def read_ocr_blocks(reader: Reader, content: bytes) -> list[dict]:
+    result = reader.readtext(
+        content,
+        detail=1,
+        paragraph=False,
+    )
+
+    blocks = []
+
+    for item in result:
+        if not isinstance(item, (list, tuple)) or len(item) != 3:
+            raise TypeError("Ожидались координаты, текст и уверенность")
+
+        box, text, confidence = item
+
+        blocks.append({
+            "text": text,
+            "confidence": float(confidence),
+            "box": [
+                [float(point[0]), float(point[1])]
+                for point in box
+            ],
+        })
+
+    return blocks

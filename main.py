@@ -1,5 +1,6 @@
 import logging
 from contextlib import asynccontextmanager
+from enum import Enum
 
 from anyio import CapacityLimiter, to_thread
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
@@ -7,11 +8,17 @@ from pydantic import BaseModel
 from starlette.responses import JSONResponse
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
-from services.ocr_service import InvalidImage, create_reader, ocr
+from services.field_extractor import extract_study_fields
+from services.ocr_service import InvalidImage, create_reader, ocr, read_ocr_blocks
 
 MAX_FILE_BYTES = 10 * 1024 * 1024
 MAX_REQUEST_BYTES = 42 * 1024 * 1024
 logger = logging.getLogger(__name__)
+
+class DocumentType(str, Enum):
+    STUDY = 'study_certificate'
+    LEAVE = 'academic_leave_application'
+    INTERNSHIP = 'internship_certificate'
 
 
 class RequestSizeLimit:
@@ -61,9 +68,9 @@ async def lifespan(app: FastAPI):
 
 class AnalyzeResponse(BaseModel):
     status: str
-    promt: str 
-    photos: int
-    answers: list[str]
+    blocks: list[dict]
+    document_type: DocumentType
+    fields: dict[str, str | bool]
 
 
 app = FastAPI(title='Online Dekanat API', version='0.0.1', lifespan=lifespan)
@@ -79,6 +86,7 @@ def health():
 async def analyze(
     photos: list[UploadFile] = File(...),
     prompt: str = Form(..., max_length=2000),
+    document_type: DocumentType = Form(...),
 ) -> AnalyzeResponse:
     try:
         prompt = prompt.strip()
@@ -113,7 +121,7 @@ async def analyze(
                 raise HTTPException(503, 'Не удалось распознать текст. Попробуйте позже') from exc
             texts.append(text)
 
-        return AnalyzeResponse(status='received', promt=prompt, photos=len(photos), answers=texts)
+        return AnalyzeResponse(status='received', document_type=document_type, fields=extract_study_fields(texts[0]), blocks=read_ocr_blocks(app.state.reader, content))
     finally:
         for photo in photos:
             await photo.close()
