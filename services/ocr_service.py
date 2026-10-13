@@ -1,9 +1,9 @@
 import os
+from collections.abc import Sequence
 from io import BytesIO
 from typing import Protocol
 
 from PIL import Image, UnidentifiedImageError
-from collections.abc import Sequence
 
 MAX_IMAGE_PIXELS = 20_000_000
 
@@ -48,6 +48,7 @@ def ocr(reader: Reader, content: bytes, content_type: str) -> str:
 
     return '\n'.join(lines)
 
+
 def read_ocr_blocks(reader: Reader, content: bytes) -> list[dict]:
     result = reader.readtext(
         content,
@@ -59,17 +60,16 @@ def read_ocr_blocks(reader: Reader, content: bytes) -> list[dict]:
 
     for item in result:
         if not isinstance(item, (list, tuple)) or len(item) != 3:
-            raise TypeError("Ожидались координаты, текст и уверенность")
+            raise TypeError('Ожидались координаты, текст и уверенность')
 
         box, text, confidence = item
 
-        blocks.append({
-            "text": text,
-            "confidence": float(confidence),
-            "box": [
-                [float(point[0]), float(point[1])]
-                for point in box
-            ],
-        })
+        blocks.append(
+            {
+                'text': text,
+                'confidence': float(confidence),
+                'box': [[float(point[0]), float(point[1])] for point in box],
+            }
+        )
 
     return blocks

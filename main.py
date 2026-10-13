@@ -8,12 +8,13 @@ from pydantic import BaseModel
 from starlette.responses import JSONResponse
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
-from services.field_extractor import extract_study_fields
-from services.ocr_service import InvalidImage, create_reader, ocr, read_ocr_blocks
+from services.ocr_service import InvalidImage, create_reader
+from services.recognition_service import recognize_document
 
 MAX_FILE_BYTES = 10 * 1024 * 1024
 MAX_REQUEST_BYTES = 42 * 1024 * 1024
 logger = logging.getLogger(__name__)
+
 
 class DocumentType(str, Enum):
     STUDY = 'study_certificate'
@@ -68,6 +69,7 @@ async def lifespan(app: FastAPI):
 
 class AnalyzeResponse(BaseModel):
     status: str
+    ocr_text: str
     blocks: list[dict]
     document_type: DocumentType
     fields: dict[str, str | bool]
@@ -92,13 +94,12 @@ async def analyze(
         prompt = prompt.strip()
         if not prompt:
             raise HTTPException(422, 'Введите вопрос')
-        if not 1 <= len(photos) <= 4:
-            raise HTTPException(422, 'Прикрепите от 1 до 4 фотографий')
+        if len(photos) != 1:
+            raise HTTPException(422, 'Прикрепите один документ')
 
-        texts = []
         for photo in photos:
-            if photo.content_type not in ('image/jpeg', 'image/png'):
-                raise HTTPException(422, 'Прикрепите фотографии в формате JPEG или PNG')
+            if photo.content_type not in ('image/jpeg', 'image/png', 'application/pdf'):
+                raise HTTPException(422, 'Прикрепите документ в формате JPEG, PNG или PDF')
 
             content = await photo.read(MAX_FILE_BYTES + 1)
             if len(content) > MAX_FILE_BYTES:
@@ -107,11 +108,12 @@ async def analyze(
                 raise HTTPException(422, 'Файл не может быть пустым')
 
             try:
-                text = await to_thread.run_sync(
-                    ocr,
+                result = await to_thread.run_sync(
+                    recognize_document,
                     app.state.reader,
                     content,
                     photo.content_type,
+                    document_type.value,
                     limiter=app.state.ocr_limiter,
                 )
             except InvalidImage as exc:
@@ -119,9 +121,8 @@ async def analyze(
             except Exception as exc:
                 logger.error('OCR failed (%s)', type(exc).__name__)
                 raise HTTPException(503, 'Не удалось распознать текст. Попробуйте позже') from exc
-            texts.append(text)
 
-        return AnalyzeResponse(status='received', document_type=document_type, fields=extract_study_fields(texts[0]), blocks=read_ocr_blocks(app.state.reader, content))
+        return AnalyzeResponse(status='received', document_type=document_type, **result)
     finally:
         for photo in photos:
             await photo.close()

@@ -3,7 +3,7 @@ from io import BytesIO
 
 import anyio
 import httpx
-import pytest # type: ignore
+import pytest  # type: ignore
 from fastapi import HTTPException, UploadFile
 from fastapi.testclient import TestClient
 from PIL import Image
@@ -26,12 +26,15 @@ class FakeReader:
         self.error = None
 
     def readtext(self, image, *, detail, paragraph):
-        assert detail == 0
-        assert paragraph is True
+        assert detail == 1
+        assert paragraph is False
         self.calls += 1
         if self.error:
             raise self.error
-        return self.lines
+        return [
+            ([[0, i * 40], [100, i * 40], [100, i * 40 + 20], [0, i * 40 + 20]], line, 0.99)
+            for i, line in enumerate(self.lines)
+        ]
 
 
 @pytest.fixture
@@ -52,7 +55,7 @@ def upload(client, content=None, mime='image/png', prompt='Вопрос', count=
         content = image_bytes()
     return client.post(
         '/analyze',
-        data={'prompt': prompt},
+        data={'prompt': prompt, 'document_type': 'study_certificate'},
         files=[('photos', ('photo', content, mime)) for _ in range(count)],
     )
 
@@ -67,26 +70,25 @@ def test_health(client):
 def test_valid_image_preserves_contract(client, reader, image_format, mime):
     response = upload(client, image_bytes(image_format), mime, '  Вопрос  ')
     assert response.status_code == 200
-    assert response.json() == {
-        'status': 'received',
-        'promt': 'Вопрос',
-        'photos': 1,
-        'answers': ['Первая строка\nSecond line'],
-    }
+    result = response.json()
+    assert result['status'] == 'received'
+    assert result['document_type'] == 'study_certificate'
+    assert result['ocr_text'] == 'Первая строка\nSecond line'
+    assert len(result['blocks']) == 2
+    assert result['fields']['student_name'] == 'не найдено'
+    assert result['fields']['signature_present'] is False
     assert reader.calls == 1
 
 
 def test_four_photos(client, reader):
     response = upload(client, count=4)
-    assert response.status_code == 200
-    assert response.json()['photos'] == 4
-    assert len(response.json()['answers']) == 4
-    assert reader.calls == 4
+    assert response.status_code == 422
+    assert reader.calls == 0
 
 
 def test_no_text(client, reader):
     reader.lines = []
-    assert upload(client).json()['answers'] == ['']
+    assert upload(client).json()['ocr_text'] == ''
 
 
 @pytest.mark.parametrize('prompt', ['', '   ', 'x' * 2001])
@@ -191,9 +193,9 @@ def test_files_closed_after_handler(client, monkeypatch, fails):
     async def check():
         if fails:
             with pytest.raises(HTTPException):
-                await main.analyze([photo], 'Вопрос')
+                await main.analyze([photo], 'Вопрос', main.DocumentType.STUDY)
         else:
-            await main.analyze([photo], 'Вопрос')
+            await main.analyze([photo], 'Вопрос', main.DocumentType.STUDY)
         assert photo.file.closed
 
     anyio.run(check)
@@ -234,7 +236,7 @@ def test_health_remains_available_and_ocr_is_serial(monkeypatch):
                     responses.append(
                         await client.post(
                             '/analyze',
-                            data={'prompt': 'Вопрос'},
+                            data={'prompt': 'Вопрос', 'document_type': 'study_certificate'},
                             files={'photos': ('photo.png', image_bytes(), 'image/png')},
                         )
                     )
@@ -314,7 +316,7 @@ def test_multipart_temporary_files_closed_on_stream_limit(monkeypatch):
     from starlette import formparsers
 
     files = []
-    original = formparsers.SpooledTemporaryFile # type: ignore
+    original = formparsers.SpooledTemporaryFile  # type: ignore
 
     def temporary_file(*args, **kwargs):
         file = original(*args, **kwargs)

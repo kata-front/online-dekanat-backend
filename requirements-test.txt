@@ -8,3 +8,6 @@ Pillow==12.3.0
 httpx==0.28.1
 pytest==9.1.1
 ruff==0.17.0
+PyMuPDF==1.28.2
+opencv-python-headless==5.0.0.93
+numpy==2.5.3
