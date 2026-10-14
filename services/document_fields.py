@@ -1,5 +1,3 @@
-"""The exact field keys from the starter README, with visible document labels."""
-
 import re
 
 from services.field_extractor import _extract_labeled_value, _normalize_date, extract_study_fields

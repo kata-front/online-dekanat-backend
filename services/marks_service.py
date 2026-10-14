@@ -1,9 +1,3 @@
-"""Small image heuristics for the starter layouts, not authenticity checks.
-
-Look for a round outline near М.П. and connected strokes beside Подпись.
-Words alone never set a flag. Other layouts/shapes need testing and tuning.
-"""
-
 import re
 from io import BytesIO
 
@@ -88,3 +82,44 @@ def detect_marks(content: bytes, blocks: list[dict], needs_seal: bool) -> dict[s
     if needs_seal:
         marks['seal_present'] = seal_box is not None
     return marks
+
+def detect_round_seal(content: bytes, blocks: list[dict]) -> bool:
+    label = next(
+        (b for b in blocks if b["text"].strip().lower().startswith("подпись")),
+        None,
+    )
+
+    if label is None:
+        return False
+
+    _, top, right, bottom = _bounds(label)
+    signature_y = (top + bottom) / 2
+
+    with Image.open(BytesIO(content)) as image:
+        gray = np.array(image.convert("L"))
+
+    width = gray.shape[1]
+    ink = cv2.threshold(gray, 180, 255, cv2.THRESH_BINARY_INV)[1]
+    contours, _ = cv2.findContours(
+        ink, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE
+    )
+
+    for contour in contours:
+        x, y, w, h = cv2.boundingRect(contour)
+        perimeter = cv2.arcLength(contour, True)
+
+        if perimeter == 0:
+            continue
+
+        roundness = 4 * np.pi * cv2.contourArea(contour) / perimeter**2
+
+        if (
+            width * 0.04 < w < width * 0.35
+            and 0.75 < w / h < 1.3
+            and roundness > 0.65
+            and x > right
+            and abs(y + h / 2 - signature_y) < h
+        ):
+            return True
+
+    return False
