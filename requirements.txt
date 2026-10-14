@@ -5,7 +5,7 @@ pydantic==2.14.1
 uvicorn==0.54.0
 python-multipart==0.0.32
 Pillow==12.3.0
-easyocr==1.7.2
+tesserocr==2.11.0
 PyMuPDF==1.28.2
 opencv-python-headless==5.0.0.93
 numpy==2.5.3

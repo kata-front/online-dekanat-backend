@@ -1,27 +1,28 @@
 from typing import Literal
 
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
-
 from anyio import to_thread
+from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 
 from services.document_fields import extract_fields
 from services.document_loader import load_image
 from services.marks_service import detect_marks, detect_round_seal
-from services.ocr_service import read_ocr, InvalidImage
+from services.ocr_service import InvalidImage, read_ocr
 
 app = FastAPI()
 
 DocumentType = Literal[
-    "study_certificate",
-    "academic_leave_application",
-    "internship_certificate",
+    'study_certificate',
+    'academic_leave_application',
+    'internship_certificate',
 ]
 
 MAX_FILE_BYTES = 10 * 1024 * 1024
 
+
 @app.get('/health')
 def health():
     return {'status': 'ok'}
+
 
 @app.post('/analyze')
 async def analyze(
@@ -44,10 +45,10 @@ async def analyze(
         content = await photo.read(MAX_FILE_BYTES + 1)
 
         if not content:
-            raise HTTPException(422, "Файл пустой")
+            raise HTTPException(422, 'Файл пустой')
 
         if len(content) > MAX_FILE_BYTES:
-            raise HTTPException(413, "Размер файла не должен превышать 10 МиБ")
+            raise HTTPException(413, 'Размер файла не должен превышать 10 МиБ')
 
         try:
             image = await to_thread.run_sync(
@@ -58,8 +59,8 @@ async def analyze(
 
             ocr_result = await to_thread.run_sync(read_ocr, image)
 
-            text = ocr_result["text"]
-            blocks = ocr_result["blocks"]
+            text = ocr_result['text']
+            blocks = ocr_result['blocks']
 
         except InvalidImage as exc:
             raise HTTPException(422, str(exc)) from exc
@@ -67,30 +68,25 @@ async def analyze(
         except Exception as exc:
             raise HTTPException(
                 503,
-                "Не удалось распознать документ",
+                'Не удалось распознать документ',
             ) from exc
 
         fields = extract_fields(text, document_type)
 
-        sugnature_result = await to_thread.run_sync(
-            detect_marks,
-            image, 
-            blocks, 
-            False
-        )        
+        sugnature_result = await to_thread.run_sync(detect_marks, image, blocks, False)
 
         fields.update(sugnature_result)
 
-        if "seal_present" in fields:
-            fields["seal_present"] = await to_thread.run_sync(
+        if 'seal_present' in fields:
+            fields['seal_present'] = await to_thread.run_sync(
                 detect_round_seal,
                 image,
                 blocks,
             )
 
         return {
-            "document_type": document_type,
-            "fields": fields,
+            'document_type': document_type,
+            'fields': fields,
         }
     finally:
         for photo in photos:

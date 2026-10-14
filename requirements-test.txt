@@ -1,4 +1,4 @@
-# API tests use a fake reader and do not download OCR models or PyTorch.
+# Unit tests substitute the native OCR module and do not need Tesseract or weights.
 fastapi==0.143.0
 starlette==1.7.0
 anyio==4.15.1

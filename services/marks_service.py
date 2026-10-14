@@ -83,9 +83,10 @@ def detect_marks(content: bytes, blocks: list[dict], needs_seal: bool) -> dict[s
         marks['seal_present'] = seal_box is not None
     return marks
 
+
 def detect_round_seal(content: bytes, blocks: list[dict]) -> bool:
     label = next(
-        (b for b in blocks if b["text"].strip().lower().startswith("подпись")),
+        (b for b in blocks if b['text'].strip().lower().startswith('подпись')),
         None,
     )
 
@@ -96,13 +97,11 @@ def detect_round_seal(content: bytes, blocks: list[dict]) -> bool:
     signature_y = (top + bottom) / 2
 
     with Image.open(BytesIO(content)) as image:
-        gray = np.array(image.convert("L"))
+        gray = np.array(image.convert('L'))
 
     width = gray.shape[1]
     ink = cv2.threshold(gray, 180, 255, cv2.THRESH_BINARY_INV)[1]
-    contours, _ = cv2.findContours(
-        ink, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE
-    )
+    contours, _ = cv2.findContours(ink, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
 
     for contour in contours:
         x, y, w, h = cv2.boundingRect(contour)

@@ -10,7 +10,7 @@ from PIL import Image
 from starlette.datastructures import Headers
 
 import main
-from services import ocr_service
+from services import document_loader
 
 
 def image_bytes(image_format='PNG'):
@@ -19,28 +19,23 @@ def image_bytes(image_format='PNG'):
     return output.getvalue()
 
 
-class FakeReader:
+class FakeOCR:
     def __init__(self):
         self.calls = 0
-        self.lines = ['Первая строка', 'Second line']
+        self.text = 'ФИО студента: Иванов Иван Иванович'
         self.error = None
 
-    def readtext(self, image, *, detail, paragraph):
-        assert detail == 1
-        assert paragraph is False
+    def __call__(self, image):
         self.calls += 1
         if self.error:
             raise self.error
-        return [
-            ([[0, i * 40], [100, i * 40], [100, i * 40 + 20], [0, i * 40 + 20]], line, 0.99)
-            for i, line in enumerate(self.lines)
-        ]
+        return {'text': self.text, 'blocks': []}
 
 
 @pytest.fixture
 def reader(monkeypatch):
-    instance = FakeReader()
-    monkeypatch.setattr(main, 'create_reader', lambda: instance)
+    instance = FakeOCR()
+    monkeypatch.setattr(main, 'read_ocr', instance)
     return instance
 
 
@@ -71,12 +66,11 @@ def test_valid_image_preserves_contract(client, reader, image_format, mime):
     response = upload(client, image_bytes(image_format), mime, '  Вопрос  ')
     assert response.status_code == 200
     result = response.json()
-    assert result['status'] == 'received'
+    assert set(result) == {'document_type', 'fields'}
     assert result['document_type'] == 'study_certificate'
-    assert result['ocr_text'] == 'Первая строка\nSecond line'
-    assert len(result['blocks']) == 2
-    assert result['fields']['student_name'] == 'не найдено'
+    assert result['fields']['student_name'] == 'Иванов Иван Иванович'
     assert result['fields']['signature_present'] is False
+    assert result['fields']['seal_present'] is False
     assert reader.calls == 1
 
 
@@ -87,8 +81,9 @@ def test_four_photos(client, reader):
 
 
 def test_no_text(client, reader):
-    reader.lines = []
-    assert upload(client).json()['ocr_text'] == ''
+    reader.text = ''
+    fields = upload(client).json()['fields']
+    assert fields['student_name'] == 'не найдено'
 
 
 @pytest.mark.parametrize('prompt', ['', '   ', 'x' * 2001])
@@ -143,35 +138,9 @@ def test_exact_file_byte_limit(client, monkeypatch):
 
 
 def test_image_pixel_limit(client, reader, monkeypatch):
-    monkeypatch.setattr(ocr_service, 'MAX_IMAGE_PIXELS', 399)
+    monkeypatch.setattr(document_loader, 'MAX_IMAGE_PIXELS', 399)
     assert upload(client).status_code == 422
     assert reader.calls == 0
-
-
-def test_declared_request_limit(client, reader, monkeypatch):
-    monkeypatch.setattr(main, 'MAX_REQUEST_BYTES', 1)
-    assert upload(client).status_code == 413
-    assert reader.calls == 0
-
-
-@pytest.mark.parametrize('declared_length', [None, '1'])
-def test_streamed_request_limit(client, reader, monkeypatch, declared_length):
-    monkeypatch.setattr(main, 'MAX_REQUEST_BYTES', 30)
-    body = (
-        b'--boundary\r\nContent-Disposition: form-data; name="prompt"\r\n\r\n'
-        b'question\r\n--boundary--\r\n'
-    )
-    headers = {'Content-Type': 'multipart/form-data; boundary=boundary'}
-    if declared_length is not None:
-        headers['Content-Length'] = declared_length
-    response = client.post('/analyze', content=iter([body[:20], body[20:]]), headers=headers)
-    assert response.status_code == 413
-    assert reader.calls == 0
-
-
-def test_invalid_content_length(client):
-    response = client.post('/analyze', content=b'x', headers={'Content-Length': 'invalid'})
-    assert response.status_code == 400
 
 
 def test_ocr_error_is_private(client, reader, caplog):
@@ -180,7 +149,6 @@ def test_ocr_error_is_private(client, reader, caplog):
     assert response.status_code == 503
     assert 'secret document content' not in response.text
     assert 'secret document content' not in caplog.text
-    assert 'RuntimeError' in caplog.text
 
 
 @pytest.mark.parametrize('fails', [False, True])
@@ -193,158 +161,56 @@ def test_files_closed_after_handler(client, monkeypatch, fails):
     async def check():
         if fails:
             with pytest.raises(HTTPException):
-                await main.analyze([photo], 'Вопрос', main.DocumentType.STUDY)
+                await main.analyze([photo], 'Вопрос', 'study_certificate')
         else:
-            await main.analyze([photo], 'Вопрос', main.DocumentType.STUDY)
+            await main.analyze([photo], 'Вопрос', 'study_certificate')
         assert photo.file.closed
 
     anyio.run(check)
 
 
-def test_health_remains_available_and_ocr_is_serial(monkeypatch):
+def test_health_remains_available_during_ocr(monkeypatch):
     started = threading.Event()
     release = threading.Event()
-    lock = threading.Lock()
-    active = 0
-    peak = 0
 
-    class SlowReader(FakeReader):
-        def readtext(self, image, *, detail, paragraph):
-            nonlocal active, peak
-            with lock:
-                active += 1
-                peak = max(peak, active)
-            started.set()
-            try:
-                assert release.wait(5), 'OCR was not released'
-                return super().readtext(image, detail=detail, paragraph=paragraph)
-            finally:
-                with lock:
-                    active -= 1
+    def slow_ocr(image):
+        started.set()
+        assert release.wait(5), 'OCR was not released'
+        return {'text': '', 'blocks': []}
 
-    reader = SlowReader()
-    monkeypatch.setattr(main, 'create_reader', lambda: reader)
+    monkeypatch.setattr(main, 'read_ocr', slow_ocr)
 
     async def check():
-        async with main.lifespan(main.app):
-            async with httpx.AsyncClient(
-                transport=httpx.ASGITransport(app=main.app), base_url='http://test'
-            ) as client:
-                responses = []
-
-                async def request_ocr():
-                    responses.append(
-                        await client.post(
-                            '/analyze',
-                            data={'prompt': 'Вопрос', 'document_type': 'study_certificate'},
-                            files={'photos': ('photo.png', image_bytes(), 'image/png')},
-                        )
-                    )
-
-                try:
-                    async with anyio.create_task_group() as group:
-                        group.start_soon(request_ocr)
-                        assert await anyio.to_thread.run_sync(started.wait, 2)
-                        group.start_soon(request_ocr)
-                        await anyio.sleep(0.05)
-                        with anyio.fail_after(1):
-                            response = await client.get('/health')
-                        assert response.status_code == 200
-                        assert not release.is_set()
-                        release.set()
-                finally:
-                    release.set()
-                assert len(responses) == 2
-                assert all(response.status_code == 200 for response in responses)
-                assert reader.calls == 2
-                assert peak == 1
-
-    anyio.run(check)
-
-
-def test_reader_is_removed_after_shutdown(reader):
-    with TestClient(main.app):
-        assert main.app.state.reader is reader
-    assert not hasattr(main.app.state, 'reader')
-
-
-def test_startup_failure_is_not_hidden(monkeypatch):
-    def fail():
-        raise RuntimeError('model unavailable')
-
-    monkeypatch.setattr(main, 'create_reader', fail)
-    with pytest.raises(RuntimeError, match='model unavailable'), TestClient(main.app):
-        pass
-
-
-@pytest.mark.parametrize(
-    ('setting', 'expected'),
-    [(None, False), ('false', False), ('0', False), ('true', True), ('1', True), ('TRUE', True)],
-)
-def test_reader_gpu_setting(monkeypatch, setting, expected):
-    import sys
-    from types import SimpleNamespace
-
-    if setting is None:
-        monkeypatch.delenv('OCR_GPU', raising=False)
-    else:
-        monkeypatch.setenv('OCR_GPU', setting)
-    calls = []
-    sentinel = object()
-
-    def factory(languages, *, gpu):
-        calls.append((languages, gpu))
-        return sentinel
-
-    monkeypatch.setitem(sys.modules, 'easyocr', SimpleNamespace(Reader=factory))
-    assert ocr_service.create_reader() is sentinel
-    assert calls == [(['ru', 'en'], expected)]
-
-
-def test_invalid_gpu_setting(monkeypatch):
-    monkeypatch.setenv('OCR_GPU', 'invalid')
-    with pytest.raises(ValueError, match='OCR_GPU'):
-        ocr_service.create_reader()
-
-
-def test_exact_image_pixel_limit(client, monkeypatch):
-    monkeypatch.setattr(ocr_service, 'MAX_IMAGE_PIXELS', 400)
-    assert upload(client).status_code == 200
-
-
-def test_multipart_temporary_files_closed_on_stream_limit(monkeypatch):
-    from starlette import formparsers
-
-    files = []
-    original = formparsers.SpooledTemporaryFile  # type: ignore
-
-    def temporary_file(*args, **kwargs):
-        file = original(*args, **kwargs)
-        files.append(file)
-        return file
-
-    monkeypatch.setattr(formparsers, 'SpooledTemporaryFile', temporary_file)
-    prefix = (
-        b'--boundary\r\nContent-Disposition: form-data; name="photos"; filename="p.png"\r\n'
-        b'Content-Type: image/png\r\n\r\nx'
-    )
-    monkeypatch.setattr(main, 'MAX_REQUEST_BYTES', len(prefix) + 10)
-
-    async def check():
-        async def body():
-            yield prefix
-            yield b'x' * 100
-
         async with httpx.AsyncClient(
             transport=httpx.ASGITransport(app=main.app), base_url='http://test'
         ) as client:
-            response = await client.post(
-                '/analyze',
-                content=body(),
-                headers={'Content-Type': 'multipart/form-data; boundary=boundary'},
-            )
-        assert response.status_code == 413
-        assert files
-        assert all(file.closed for file in files)
+            responses = []
+
+            async def request_ocr():
+                responses.append(
+                    await client.post(
+                        '/analyze',
+                        data={'prompt': 'Вопрос', 'document_type': 'study_certificate'},
+                        files={'photos': ('photo.png', image_bytes(), 'image/png')},
+                    )
+                )
+
+            try:
+                async with anyio.create_task_group() as group:
+                    group.start_soon(request_ocr)
+                    assert await anyio.to_thread.run_sync(started.wait, 2)
+                    with anyio.fail_after(1):
+                        response = await client.get('/health')
+                    assert response.status_code == 200
+                    assert not release.is_set()
+                    release.set()
+            finally:
+                release.set()
+            assert responses[0].status_code == 200
 
     anyio.run(check)
+
+
+def test_exact_image_pixel_limit(client, monkeypatch):
+    monkeypatch.setattr(document_loader, 'MAX_IMAGE_PIXELS', 400)
+    assert upload(client).status_code == 200

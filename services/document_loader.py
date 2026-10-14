@@ -4,7 +4,8 @@ from io import BytesIO
 import pymupdf
 from PIL import Image
 
-from services.ocr_service import InvalidImage, MAX_IMAGE_PIXELS
+from services.ocr_service import MAX_IMAGE_PIXELS, InvalidImage
+
 
 def load_image(content: bytes, content_type: str) -> bytes:
     try:
@@ -25,9 +26,7 @@ def load_image(content: bytes, content_type: str) -> bytes:
                     raise InvalidImage('слишком большая картинка')
 
                 content = page.get_pixmap(
-                    matrix=pymupdf.Matrix(2, 2),
-                    colorspace=pymupdf.csRGB,
-                    alpha=False
+                    matrix=pymupdf.Matrix(2, 2), colorspace=pymupdf.csRGB, alpha=False
                 ).tobytes('png')
 
             content_type = 'image/png'
@@ -38,20 +37,20 @@ def load_image(content: bytes, content_type: str) -> bytes:
         }.get(content_type)
 
         if expected_format is None:
-            raise InvalidImage("Поддерживаются JPEG, PNG и PDF")
+            raise InvalidImage('Поддерживаются JPEG, PNG и PDF')
 
         with Image.open(BytesIO(content)) as image:
             if image.format != expected_format:
-                raise InvalidImage("Содержимое не соответствует формату")
+                raise InvalidImage('Содержимое не соответствует формату')
 
             if image.width * image.height > MAX_IMAGE_PIXELS:
-                raise InvalidImage("Изображение слишком большое")
+                raise InvalidImage('Изображение слишком большое')
 
             image.load()
 
         return content
-    
+
     except InvalidImage:
         raise
     except (OSError, ValueError, RuntimeError, Image.DecompressionBombError) as exc:
-        raise InvalidImage("Не удалось прочитать файл") from exc 
+        raise InvalidImage('Не удалось прочитать файл') from exc

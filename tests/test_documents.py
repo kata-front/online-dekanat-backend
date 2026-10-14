@@ -11,9 +11,8 @@ import main
 from services.document_fields import extract_fields
 from services.document_loader import load_image
 from services.field_extractor import _normalize_date, extract_study_fields
-from services.marks_service import detect_marks
+from services.marks_service import detect_marks, detect_round_seal
 from services.ocr_service import InvalidImage
-from services.recognition_service import blocks_to_text
 
 
 def block(text, x=40, y=480, width=120, height=20):
@@ -53,7 +52,7 @@ def test_invalid_pdf(content):
 
 
 def test_pdf_pixel_limit(monkeypatch):
-    monkeypatch.setattr('services.ocr_service.MAX_IMAGE_PIXELS', 100)
+    monkeypatch.setattr('services.document_loader.MAX_IMAGE_PIXELS', 100)
     with pytest.raises(InvalidImage, match='слишком большая'):
         load_image(make_pdf(), 'application/pdf')
 
@@ -124,18 +123,6 @@ def test_internship_fields():
     }
 
 
-def test_split_label_and_value_are_joined():
-    blocks = [
-        block('01.09.2026', x=250, y=80),
-        block('Дата выдачи:', x=40, y=82),
-        block('ФИО студента:', x=40, y=40),
-        block('Иванов Иван Иванович', x=220, y=40),
-    ]
-    text = blocks_to_text(blocks)
-    assert extract_study_fields(text)['issue_date'] == '2026-09-01'
-    assert extract_study_fields(text)['student_name'] == 'Иванов Иван Иванович'
-
-
 def marks_image(signature=False, seal=False, printed_only=False):
     image = Image.new('RGB', (600, 800), 'white')
     draw = ImageDraw.Draw(image)
@@ -198,24 +185,15 @@ def test_missing_anchors_do_not_confirm_marks():
     ],
 )
 def test_pdf_api_for_each_type(monkeypatch, document_type):
-    class Reader:
-        calls = 0
+    calls = []
 
-        def readtext(self, image, *, detail, paragraph):
-            assert detail == 1 and paragraph is False
-            with Image.open(BytesIO(image)) as picture:
-                assert picture.format == 'PNG'
-            self.calls += 1
-            return [
-                (
-                    block('ФИО студента: Иванов Иван Иванович', y=40)['box'],
-                    'ФИО студента: Иванов Иван Иванович',
-                    0.99,
-                )
-            ]
+    def fake_ocr(image):
+        with Image.open(BytesIO(image)) as picture:
+            assert picture.format == 'PNG'
+        calls.append(image)
+        return {'text': 'ФИО студента: Иванов Иван Иванович', 'blocks': []}
 
-    reader = Reader()
-    monkeypatch.setattr(main, 'create_reader', lambda: reader)
+    monkeypatch.setattr(main, 'read_ocr', fake_ocr)
     with TestClient(main.app) as client:
         response = client.post(
             '/analyze',
@@ -226,12 +204,12 @@ def test_pdf_api_for_each_type(monkeypatch, document_type):
     result = response.json()
     assert result['document_type'] == document_type
     assert result['fields']['student_name'] == 'Иванов Иван Иванович'
-    assert result['ocr_text']
-    assert reader.calls == 1
+    assert len(calls) == 1
+    assert ('seal_present' in result['fields']) == (document_type != 'academic_leave_application')
 
 
 def test_pdf_error_is_422(monkeypatch):
-    monkeypatch.setattr(main, 'create_reader', object)
+    monkeypatch.setattr(main, 'read_ocr', lambda image: {'text': '', 'blocks': []})
     with TestClient(main.app) as client:
         response = client.post(
             '/analyze',
@@ -242,7 +220,7 @@ def test_pdf_error_is_422(monkeypatch):
 
 
 def test_unknown_type_is_422(monkeypatch):
-    monkeypatch.setattr(main, 'create_reader', object)
+    monkeypatch.setattr(main, 'read_ocr', lambda image: {'text': '', 'blocks': []})
     with TestClient(main.app) as client:
         response = client.post(
             '/analyze',
@@ -260,3 +238,12 @@ def test_image_labeled_as_pdf_is_rejected():
 def test_latin_stamp_label():
     blocks = [block('Подпись сотрудника:'), block('M.P.', x=450, y=550, width=40)]
     assert detect_marks(marks_image(seal=True), blocks, True)['seal_present'] is True
+
+
+@pytest.mark.parametrize('seal', [False, True])
+def test_round_seal_without_mp_word(seal):
+    assert detect_round_seal(marks_image(seal=seal), [block('Подпись')]) is seal
+
+
+def test_round_seal_requires_signature_anchor():
+    assert detect_round_seal(marks_image(seal=True), []) is False
