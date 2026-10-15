@@ -85,8 +85,8 @@ __all__ = [
     'ModelOutputError',
 ]
 
-MODEL_NAME = 'Qwen/Qwen3-0.6B'
-MODEL_REVISION = 'c1899de289a04d12100db370d81485cdf75e47ca'
+MODEL_NAME = 'Qwen/Qwen3-1.7B'
+MODEL_REVISION = 'main'
 CACHE_DIR = Path(
     os.environ.get(
         'QUESTION_MODEL_CACHE', str(Path(__file__).resolve().parents[1] / 'models' / 'llm')
@@ -620,13 +620,8 @@ def _load_model_once() -> tuple[Any, Any]:
         threads = int(_number_setting('QUESTION_MODEL_THREADS', min(4, os.cpu_count() or 1)))
         torch.set_num_threads(max(1, threads))
         config = AutoConfig.from_pretrained(path, local_files_only=True, trust_remote_code=False)
-        if (
-            config.model_type != 'qwen3'
-            or config.hidden_size != 1024
-            or config.num_hidden_layers != 28
-            or config.vocab_size != 151936
-        ):
-            raise ModelUnavailable('This module requires the Qwen3-0.6B model snapshot')
+        if config.model_type != 'qwen3':
+            raise ModelUnavailable('Expected a Qwen3 model')
         tokenizer = AutoTokenizer.from_pretrained(
             path,
             local_files_only=True,
