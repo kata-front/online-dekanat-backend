@@ -67,7 +67,7 @@ from collections.abc import Mapping
 from concurrent.futures import ThreadPoolExecutor
 from functools import lru_cache
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 from pydantic import BaseModel, ConfigDict, model_validator
 
@@ -219,9 +219,12 @@ class ModelOutputError(RuntimeError):
     """Inference did not produce a permitted classification."""
 
 
+QuestionIntent = Literal['field', 'validation', 'decision', 'unsupported']
+
+
 class QuestionClassification(BaseModel):
     model_config = ConfigDict(extra='forbid', strict=True, frozen=True)
-    intent: Literal['field', 'validation', 'decision', 'unsupported']
+    intent: QuestionIntent
     field: str | None
 
     @model_validator(mode='after')
@@ -319,7 +322,9 @@ def _has(pattern: str, question: str) -> bool:
     return re.search(pattern, question) is not None
 
 
-def _rule_classification(question: str, keys: tuple[str, ...]) -> tuple[str, str | None] | None:
+def _rule_classification(
+    question: str, keys: tuple[str, ...]
+) -> tuple[QuestionIntent, str | None] | None:
     """High precision routing, no values or document/question IDs involved."""
     q = _words(question)
     available = set(keys)
@@ -610,7 +615,7 @@ def _load_model_once() -> tuple[Any, Any]:
     _LOG.warning('Loading local %s classifier on CPU; no download is performed', MODEL_NAME)
     try:
         import torch
-        from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer
+        from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer, GenerationConfig
 
         threads = int(_number_setting('QUESTION_MODEL_THREADS', min(4, os.cpu_count() or 1)))
         torch.set_num_threads(max(1, threads))
@@ -627,7 +632,8 @@ def _load_model_once() -> tuple[Any, Any]:
             local_files_only=True,
             trust_remote_code=False,
         )
-        model = AutoModelForCausalLM.from_pretrained(
+        # AutoModel selects the concrete class dynamically from the snapshot.
+        model: Any = AutoModelForCausalLM.from_pretrained(
             path,
             local_files_only=True,
             trust_remote_code=False,
@@ -639,7 +645,11 @@ def _load_model_once() -> tuple[Any, Any]:
         model.to('cpu')
         model.eval()
         # Reset ignored sampling defaults; greedy decoding remains unchanged.
-        model.generation_config.update(temperature=1.0, top_p=1.0, top_k=50)
+        generation_config: GenerationConfig | None = model.generation_config
+        if generation_config is None:
+            generation_config = GenerationConfig.from_model_config(config)
+            model.generation_config = generation_config
+        generation_config.update(temperature=1.0, top_p=1.0, top_k=50)
     except ModelUnavailable:
         raise
     except Exception as exc:
@@ -662,7 +672,9 @@ def load_model() -> tuple[Any, Any]:
         _LOAD_LOCK.release()
 
 
-def _model_classification(question: str, keys: tuple[str, ...]) -> tuple[str, str | None, str]:
+def _model_classification(
+    question: str, keys: tuple[str, ...]
+) -> tuple[QuestionIntent, str | None, str]:
     timeout = _number_setting('QUESTION_MODEL_QUEUE_TIMEOUT', 10)
     if not _INFERENCE_SLOTS.acquire(blocking=False):
         raise ModelBusy('Classifier inference capacity is full; retry later')
@@ -735,9 +747,17 @@ def _model_classification(question: str, keys: tuple[str, ...]) -> tuple[str, st
         class Deadline(StoppingCriteria):
             expired = False
 
-            def __call__(self, input_ids, scores, **kwargs):
+            def __call__(self, input_ids, scores, **kwargs) -> torch.BoolTensor:
                 self.expired = time.monotonic() >= deadline
-                return self.expired
+                return cast(
+                    torch.BoolTensor,
+                    torch.full(
+                        (input_ids.shape[0],),
+                        self.expired,
+                        dtype=torch.bool,
+                        device=input_ids.device,
+                    ),
+                )
 
         stop = Deadline()
         try:
@@ -767,7 +787,9 @@ def _model_classification(question: str, keys: tuple[str, ...]) -> tuple[str, st
 
 
 @lru_cache(maxsize=512)
-def _classify_cached(question: str, keys: tuple[str, ...]) -> tuple[str, str | None, str]:
+def _classify_cached(
+    question: str, keys: tuple[str, ...]
+) -> tuple[QuestionIntent, str | None, str]:
     route = _rule_classification(question, keys)
     if route is not None:
         intent, field = route
