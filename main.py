@@ -7,6 +7,7 @@ from services.document_fields import extract_fields
 from services.document_loader import load_image
 from services.marks_service import detect_marks, detect_round_seal
 from services.ocr_service import InvalidImage, read_ocr
+from services.question_model import install_question_classifier
 
 app = FastAPI()
 
@@ -91,3 +92,6 @@ async def analyze(
     finally:
         for photo in photos:
             await photo.close()
+
+
+install_question_classifier(app, analyze)
