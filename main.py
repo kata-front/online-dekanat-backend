@@ -3,6 +3,7 @@ from typing import Literal
 from anyio import to_thread
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 
+from services.answer_service import build_answer
 from services.document_fields import extract_fields
 from services.document_loader import load_image
 from services.marks_service import detect_marks, detect_round_seal
@@ -89,7 +90,13 @@ async def analyze(
         validation = validate_fileds(fields, document_type)
         classification = await classify_question_for_api(prompt, fields)
 
+        try:
+            answer = build_answer(document_type, fields, validation, classification)
+        except ValueError as exc:
+            raise HTTPException(503, "Не удалось сформировать ответ") from exc
+
         return {
+            **answer,
             "document_type": document_type,
             "ocr_text": text,
             "fields": fields,
