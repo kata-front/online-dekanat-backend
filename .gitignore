@@ -121,3 +121,6 @@ Pipfile.lock
 
 # Other
 *.pot
+
+/models/llm/
+/tests/models/llm/

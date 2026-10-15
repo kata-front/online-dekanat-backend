@@ -7,6 +7,7 @@ from services.document_fields import extract_fields
 from services.document_loader import load_image
 from services.marks_service import detect_marks, detect_round_seal
 from services.ocr_service import InvalidImage, read_ocr
+from services.validation.service import validate_fileds
 
 app = FastAPI()
 
@@ -84,9 +85,13 @@ async def analyze(
                 blocks,
             )
 
+        validation = validate_fileds(fields, document_type)
+
         return {
-            'document_type': document_type,
-            'fields': fields,
+            "document_type": document_type,
+            "ocr_text": text,
+            "fields": fields,
+            "validation": validation,
         }
     finally:
         for photo in photos:
