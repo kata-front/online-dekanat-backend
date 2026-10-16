@@ -1,3 +1,4 @@
+import json
 import threading
 from io import BytesIO
 
@@ -66,7 +67,18 @@ def test_valid_image_preserves_contract(client, reader, image_format, mime):
     response = upload(client, image_bytes(image_format), mime, '  Вопрос  ')
     assert response.status_code == 200
     result = response.json()
-    assert set(result) == {'document_type', 'fields'}
+    assert set(result) == {
+        'answerable',
+        'value',
+        'answer',
+        'sources',
+        'document_type',
+        'ocr_text',
+        'fields',
+        'validation',
+        'classification',
+        'manual_fields',
+    }
     assert result['document_type'] == 'study_certificate'
     assert result['fields']['student_name'] == 'Иванов Иван Иванович'
     assert result['fields']['signature_present'] is False
@@ -84,6 +96,64 @@ def test_no_text(client, reader):
     reader.text = ''
     fields = upload(client).json()['fields']
     assert fields['student_name'] == 'не найдено'
+
+
+def test_manual_date_is_used_for_answer_and_validation(client, reader, monkeypatch):
+    async def classify_question(prompt, fields):
+        return {'intent': 'field', 'field': 'issue_date'}
+
+    monkeypatch.setattr(main, 'classify_question_for_api', classify_question)
+    response = client.post(
+        '/analyze',
+        data={
+            'prompt': 'Какая дата выдачи?',
+            'document_type': 'study_certificate',
+            'manual_fields': json.dumps(
+                [
+                    {
+                        'id': 'issue_date',
+                        'label': 'Дата выдачи',
+                        'value': '2026-10-15',
+                        'status': 'manual',
+                        'source': 'manual',
+                    }
+                ]
+            ),
+        },
+        files={'photos': ('photo.png', image_bytes(), 'image/png')},
+    )
+
+    assert response.status_code == 200
+    result = response.json()
+    assert result['fields']['issue_date'] == '2026-10-15'
+    assert 'issue_date' not in result['validation']['missing_fields']
+    assert result['value'] == '2026-10-15'
+    assert result['manual_fields'] == ['issue_date']
+
+
+@pytest.mark.parametrize(
+    'manual_fields',
+    [
+        '[{"id":"unknown_field","value":"value"}]',
+        '[{"id":"signature_present","value":"maybe"}]',
+        '[{"id":"issue_date","value":""}]',
+        '[{"id":"issue_date","value":"2026-10-15"},{"id":"issue_date","value":"2026-10-16"}]',
+        '{"issue_date":"2026-10-15"}',
+        'not-json',
+    ],
+)
+def test_invalid_manual_fields_are_rejected(client, manual_fields):
+    response = client.post(
+        '/analyze',
+        data={
+            'prompt': 'Вопрос',
+            'document_type': 'study_certificate',
+            'manual_fields': manual_fields,
+        },
+        files={'photos': ('photo.png', image_bytes(), 'image/png')},
+    )
+
+    assert response.status_code == 422
 
 
 @pytest.mark.parametrize('prompt', ['', '   ', 'x' * 2001])
