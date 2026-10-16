@@ -40,7 +40,21 @@ def _extract_labeled_value(text: str, label: str) -> str:
 
     value = match.group(1).strip()
 
-    return value if value else 'не найдено'
+    if value:
+        return value
+
+    for line in text[match.end() :].splitlines():
+        value = line.strip()
+
+        if not value:
+            continue
+
+        if ':' in value:
+            return 'не найдено'
+
+        return value
+
+    return 'не найдено'
 
 
 def _normalize_date(value: str) -> str:

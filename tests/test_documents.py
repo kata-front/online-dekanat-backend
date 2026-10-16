@@ -81,6 +81,26 @@ def test_empty_field_does_not_take_next_line():
     assert len(fields) == 10
 
 
+@pytest.mark.parametrize('separator', ['\n', '\r\n', '\n\n'])
+def test_extracts_value_wrapped_below_label(separator):
+    fields = extract_study_fields(
+        f'ФИО студента:{separator}Иванов Иван Иванович\n'
+        f'Дата выдачи:{separator}1 сентября 2026 года\n'
+        'Название вуза: Университет'
+    )
+
+    assert fields['student_name'] == 'Иванов Иван Иванович'
+    assert fields['issue_date'] == '2026-09-01'
+
+
+def test_wrapped_empty_field_stops_at_the_next_label():
+    fields = extract_study_fields('ФИО студента:\n\nНазвание вуза:\nУниверситет\nДата выдачи:')
+
+    assert fields['student_name'] == 'не найдено'
+    assert fields['university'] == 'Университет'
+    assert fields['issue_date'] == 'не найдено'
+
+
 def test_academic_leave_fields():
     fields = extract_fields(
         'ФИО студента: Петров Иван Сергеевич\n'
